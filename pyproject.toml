@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "numpy",
     "librosa",
+    "loguru",
     "scipy",
     "matplotlib",
     "brucezilany",

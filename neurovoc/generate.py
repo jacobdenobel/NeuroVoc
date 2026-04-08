@@ -4,6 +4,7 @@ import pathlib
 import numpy as np
 import phast
 import brucezilany
+from loguru import logger
 
 from .neurogram import (
     Neurogram,
@@ -123,6 +124,7 @@ def process_neurogram(
     name: str,
     duration: float,
 ):
+    logger.info("rebin neurogram")
     neurogram_data = bin_over_y(neurogram_data, fiber_freq, frequencies, agg=np.sum)
 
     # The end of response does not mean the end of the stimulus
@@ -137,9 +139,11 @@ def process_neurogram(
         neurogram_data = neurogram_data[:, :zero_columns]
 
     if window_size is not None:
+        logger.info(f"applying hann filter of size {window_size}")
         neurogram_data = smooth(neurogram_data, "hann", window_size, 1)
 
     if normalize:
+        logger.info("scaling neurogram to [0,1)")
         neurogram_data = min_max_scale(neurogram_data, 0, 1)
 
     return Neurogram(binsize, frequencies, neurogram_data, name)
@@ -167,11 +171,14 @@ def specres(
     n_threads: int = -1,
     **kwargs,
 ) -> Neurogram:
-
+    if isinstance(audio, (str, pathlib.Path)):
+        logger.info(f"loading audio from file: {audio}")
+    else:
+        logger.info(f"using audio signal of length {len(audio)} with sr {audio_fs}")
     phast.set_seed(seed)
     np.random.seed(seed)
     frequencies = mel_scale(n_mels, min_freq, max_freq)
-    
+
     tp = phast.load_df120()
 
     assert max_freq > phast.scs.ab.defaults.ELECTRODE_FREQ_UPPER[-1]
@@ -180,7 +187,7 @@ def specres(
         tp, get_electrode_freq_specres(), frequencies, n_fibers_per_bin
     )
     audio_signal, audio_fs, duration = load_audio(audio, audio_fs, ref_db)
-
+    logger.info("creating neurogram")
     (audio_signal, FS), pulse_train, neurogram = phast.ab_e2e(
         audio_signal=audio_signal,
         audio_fs=audio_fs,
@@ -200,7 +207,7 @@ def specres(
         n_jobs=n_threads,
         **kwargs,
     )
-
+    logger.info("processing neurogram")
     neurogram = process_neurogram(
         neurogram.data,
         fiber_freq,
@@ -236,7 +243,10 @@ def ace(
     version: str = "25_8",
     **kwargs,
 ) -> Neurogram:
-
+    if isinstance(audio, (str, pathlib.Path)):
+        logger.info(f"loading audio from file: {audio}")
+    else:
+        logger.info(f"using audio signal of length {len(audio)} with sr {audio_fs}")
     phast.set_seed(seed)
     np.random.seed(seed)
     frequencies = mel_scale(n_mels, min_freq, max_freq)
@@ -247,6 +257,7 @@ def ace(
     )
     audio_signal, audio_fs, duration = load_audio(audio, audio_fs, ref_db)
     audio_signal = audio_signal.ravel()
+    logger.info("creating neurogram")
     (audio_signal, FS), pulse_train, neurogram = phast.ace_e2e(
         audio_signal=audio_signal,
         audio_fs=audio_fs,
@@ -263,7 +274,7 @@ def ace(
         binsize=binsize,
         **kwargs,
     )
-
+    logger.info("processing neurogram")
     neurogram = process_neurogram(
         neurogram.data,
         fiber_freq,
@@ -277,14 +288,13 @@ def ace(
 
     return neurogram
 
-def add_noise(audio, f1 = 0.05, f2 = 0.05):
-    
+
+def add_noise(audio, f1=0.05, f2=0.05):
+
     n1 = int(len(audio) * f1)
     n2 = int(len(audio) * f2)
     noise = np.random.uniform(
-        low=0.8 * audio.max(), 
-        high=1.2 * audio.max(), 
-        size=n1
+        low=0.8 * audio.max(), high=1.2 * audio.max(), size=n1
     ) * np.random.choice([-1, 1], size=n1)
     noise = np.r_[noise, np.random.normal(0, scale=1e-14, size=n2)]
     padded = np.r_[noise, audio]
@@ -309,6 +319,11 @@ def bruce(
     remove_outliers: bool = True,
     **kwargs,
 ):
+    if isinstance(audio, (str, pathlib.Path)):
+        logger.info(f"loading audio from file: {audio}")
+    else:
+        logger.info(f"using audio signal of length {len(audio)} with sr {audio_fs}")
+
     brucezilany.set_seed(seed)
     np.random.seed(seed)
 
@@ -322,13 +337,14 @@ def bruce(
             raise TypeError(
                 "Wrong audio signal type. If a numpy array is given, audio_fs must also be passed"
             )
-        
+
     stim = brucezilany.stimulus.normalize_db(stim, ref_db)
-    
+
     frequencies = mel_scale(n_mels, min_freq, max_freq)
 
     n_low = n_med = int(np.floor(n_fibers_per_bin / 5))
     n_high = n_fibers_per_bin - (2 * n_med)
+    logger.info("creating neurogram")
     ng = brucezilany.Neurogram(
         frequencies,
         n_low=n_low,
@@ -338,16 +354,20 @@ def bruce(
     )
     ng.bin_width = stim.time_resolution
     ng.create(stim, n_rep=n_rep, n_trials=n_trials)
+    logger.info("processing neurogram")
     neurogram_data = ng.get_output().sum(axis=1)
     neurogram_data = rebin_data(neurogram_data, stim.time_resolution, binsize)
-    
+
     if window_size is not None:
+        logger.info(f"applying hann filter of size {window_size}")
         neurogram_data = smooth(neurogram_data, "hann", window_size, 1)
 
     if normalize:
+        logger.info("scaling neurogram to [0,1)")
         neurogram_data = min_max_scale(neurogram_data, 0, 1)
 
     if remove_outliers:
+        logger.info("removing outliers")  # TODO: why is this after normalization?
         neurogram_data.clip(0, np.quantile(neurogram_data.ravel(), 0.995))
         neurogram_data = min_max_scale(neurogram_data, 0, 1)
 

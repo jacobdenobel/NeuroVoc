@@ -4,17 +4,21 @@ import os
 import pathlib
 from math import gcd
 
+from loguru import logger
 import librosa
 import scipy
 import numpy as np
 
 from .generate import Neurogram, min_max_scale
 
+
 def rms(x):
-    return np.sqrt(np.mean(x ** 2))
+    return np.sqrt(np.mean(x**2))
+
 
 def rms_db(y):
     return 20 * np.log10(rms(y))
+
 
 def scale_to_target_dbfs(y, target_dbfs):
     current_dbfs = rms_db(y)
@@ -93,14 +97,19 @@ def reconstruct(
     ref_db: float = 50,
     target_sr: int = 44100,
     target_db_fs: int = -20,
-    **kwargs
+    **kwargs,
 ):
     if isinstance(neurogram, (str, pathlib.Path)) and os.path.isfile(neurogram):
+        logger.info(f"loading neurogram from file: {neurogram}")
         neurogram = Neurogram.load(neurogram)
 
+    logger.info("downsample neurogram")
     data = downsample(neurogram.data, n_hop)
+
+    logger.info("map to power scale")
     data = power_scale(data, ref_db)
 
+    logger.info("reconstruct using griffin-lim")
     reconstructed = reconstruct_neurogram(
         data,
         neurogram.sample_rate,
@@ -109,8 +118,10 @@ def reconstruct(
         n_fft,
         n_hop,
     )
+    logger.info("resample to original sample rate")
     reconstructed = librosa.resample(
         reconstructed, orig_sr=neurogram.sample_rate, target_sr=target_sr
     )
+    logger.info("rescale to target dbfs")
     reconstructed = scale_to_target_dbfs(reconstructed, target_db_fs)
     return reconstructed

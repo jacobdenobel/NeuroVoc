@@ -5,6 +5,7 @@ import click
 import librosa
 import scipy
 import soundfile as sf
+from loguru import logger
 import matplotlib.pyplot as plt
 
 from neurovoc import Neurogram, bruce, specres, reconstruct, audio_vs_reconstructed, ace
@@ -46,7 +47,7 @@ specres_options = [
 ] + phast_options
 
 ace_options = [
-    click.option("--version", type=click.Choice(["18_0", "25_8"]), default='25_8')
+    click.option("--version", type=click.Choice(["18_0", "25_8"]), default="25_8")
 ] + phast_options
 
 reconstruct_options = [
@@ -72,6 +73,7 @@ def apply_options(options):
         for option in reversed(options):
             f = option(f)
         return f
+
     return wrapper
 
 
@@ -80,7 +82,7 @@ def timeit(func):
     def wrapper(*args, **kwargs):
         start = time.time()
         result = func(*args, **kwargs)
-        print(f"⏱️ Time elapsed: {time.time() - start:.2f} seconds")
+        logger.info(f"⏱️ Time elapsed: {time.time() - start:.2f} seconds")
         return result
 
     return wrapper
@@ -90,11 +92,11 @@ def save_ng(neurogram: Neurogram, audio_path: str, save_to: str = None):
     if save_to is None:
         save_to = audio_path.replace(".wav", f"_{neurogram.source}_neurogram.pkl")
     neurogram.save(save_to)
-    print(f"Saved neurogram at: {save_to}")
+    logger.info(f"Saved neurogram at: {save_to}")
     return save_to
 
 
-def save_wav(reconstructed, source, target, sr, label=''):
+def save_wav(reconstructed, source, target, sr, label=""):
     if target is None:
         if "neurogram" in source:
             target = source.replace("_neurogram.pkl", f"_{label}_reconstructed.wav")
@@ -102,7 +104,7 @@ def save_wav(reconstructed, source, target, sr, label=''):
             target = source.replace(".wav", f"_{label}_reconstructed.wav")
 
     sf.write(target, reconstructed, sr, subtype="PCM_32")
-    print("Saved reconstruction to: ", target)
+    logger.info(f"Saved reconstruction to: {target}")
 
 
 def reconstruct_plot_save(source: str, target: str, neurogram: Neurogram, **kwargs):
@@ -114,8 +116,14 @@ def reconstruct_plot_save(source: str, target: str, neurogram: Neurogram, **kwar
             reconstructed_signal, audio_signal.size
         )
 
-    print("Finished reconstructing signal: ", reconstructed_signal.shape)
-    save_wav(reconstructed_signal, source, target, kwargs["target_sr"], label=neurogram.source)
+    logger.info(f"Finished reconstructing signal: {reconstructed_signal.shape}")
+    save_wav(
+        reconstructed_signal,
+        source,
+        target,
+        kwargs["target_sr"],
+        label=neurogram.source,
+    )
     if kwargs["plot"]:
         audio_vs_reconstructed(
             audio_signal,
@@ -159,7 +167,7 @@ def reconstruct_cmd(source, target, **kwargs):
       target  (Optional) Output file path (.wav)
     """
     reconstructed = reconstruct(source, **kwargs)
-    print("Finished reconstructing signal: ", reconstructed.shape)
+    logger.info(f"Finished reconstructing signal: {reconstructed.shape}")
     save_wav(reconstructed, source, target, kwargs["target_sr"])
 
 
@@ -175,7 +183,7 @@ def generate_bruce(source, target, **kwargs):
       target  (Optional) Output file path to save neurogram (.npz)
     """
     neurogram = bruce(source, **kwargs)
-    print("Simulation completed. Generated ", neurogram)
+    logger.info(f"Simulation completed. Generated {neurogram}")
     save_ng(neurogram, source, target)
 
 
@@ -191,7 +199,7 @@ def generate_specres(source, target, **kwargs):
       target  (Optional) Output file path to save neurogram (.npz)
     """
     neurogram = specres(source, **kwargs)
-    print("Simulation completed. Generated ", neurogram)
+    logger.info(f"Simulation completed. Generated {neurogram}")
     save_ng(neurogram, source, target)
 
 
@@ -207,7 +215,7 @@ def generate_ace(source, target, **kwargs):
       target  (Optional) Output file path to save neurogram (.npz)
     """
     neurogram = ace(source, **kwargs)
-    print("Simulation completed. Generated ", neurogram)
+    logger.info(f"Simulation completed. Generated {neurogram}")
     save_ng(neurogram, source, target)
 
 
@@ -227,7 +235,7 @@ def vocode_specres(source, target, **kwargs):
     """
 
     neurogram = specres(source, **kwargs)
-    print("Simulation completed. Generated ", neurogram)
+    logger.info(f"Simulation completed. Generated {neurogram}")
     reconstruct_plot_save(source, target, neurogram, **kwargs)
 
 
@@ -247,7 +255,7 @@ def vocode_bruce(source, target, **kwargs):
     """
 
     neurogram = bruce(source, **kwargs)
-    print("Simulation completed. Generated ", neurogram)
+    logger.info(f"Simulation completed. Generated {neurogram}")
     reconstruct_plot_save(source, target, neurogram, **kwargs)
 
 
@@ -265,7 +273,7 @@ def vocode_ace(source, target, **kwargs):
     """
 
     neurogram = ace(source, **kwargs)
-    print("Simulation completed. Generated ", neurogram)
+    logger.info(f"Simulation completed. Generated {neurogram}")
     reconstruct_plot_save(source, target, neurogram, **kwargs)
 
 
