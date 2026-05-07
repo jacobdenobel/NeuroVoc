@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurovoc"
-version = "0.1.1"
+version = "0.1.2"
 description = "A biologically plausible vocoder framework for auditory perception modeling and cochlear implant simulation"
 authors = [
     { name="Jacob de Nobel", email="jacobdenobel@gmail.com" }

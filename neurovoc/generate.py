@@ -131,11 +131,11 @@ def process_neurogram(
     ng_duration = neurogram_data.shape[1] * binsize
     missing = duration - ng_duration
     zero_columns = int(np.ceil(missing / binsize))
-    if zero_columns > 0:
+    if missing > 0:
         neurogram_data = np.c_[
             neurogram_data, np.zeros((neurogram_data.shape[0], zero_columns))
         ]
-    else:
+    elif missing < 0:
         neurogram_data = neurogram_data[:, :zero_columns]
 
     if window_size is not None:
