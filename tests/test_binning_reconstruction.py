@@ -13,6 +13,7 @@ import phast
 
 from neurovoc import Neurogram, reconstruct
 from neurovoc.generate import (
+    configure_fiberset,
     get_electrode_freq_ace,
     get_electrode_freq_specres,
     get_fiber_freq_position,
@@ -90,6 +91,17 @@ class TestFrequencyBinning(unittest.TestCase):
         cf = get_fiber_freq_position(tp, get_electrode_freq_ace())
         order = np.argsort(tp.position)  # distance from base, ascending
         self.assertTrue(np.all(np.diff(cf[order]) <= 1e-9))
+
+    def test_fibre_frequencies_follow_the_simulated_fibre_order(self):
+        # add_duplicate_fibers_to_tp returns the unique fibres first and the duplicates
+        # appended, while fiber_freq kept the duplicates inline: rows got other fibres' CFs
+        np.random.seed(42)
+        tp = phast.load_df120()
+        selected, fiber_freq = configure_fiberset(tp, get_electrode_freq_specres(), FREQS, 10)
+        n_original = phast.load_df120().i_det.shape[0]
+        self.assertGreater(np.sum(np.asarray(selected) >= n_original), 0)  # duplicates present
+        expected = get_fiber_freq_position(tp, get_electrode_freq_specres())[selected]
+        np.testing.assert_allclose(fiber_freq, expected)
 
     def test_cochlear_profile_contacts_excite_fibres_at_their_own_place(self):
         # phast.load_cochlear flips the electrode and fibre labels to apical-first but not

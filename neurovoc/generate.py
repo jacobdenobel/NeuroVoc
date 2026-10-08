@@ -152,8 +152,10 @@ def configure_fiberset(
 ):
     fiber_freq = get_fiber_freq_position(tp, electrode_freq)
     selected_fibers = select_fibers(fiber_freq, frequencies, n_fibers_per_bin)
-    fiber_freq = fiber_freq[selected_fibers]
+    # duplicates are appended to tp and listed after the unique fibres, so look the
+    # frequencies up in the order phast will simulate (and return) the fibres
     selected_fibers = add_duplicate_fibers_to_tp(tp, selected_fibers)
+    fiber_freq = get_fiber_freq_position(tp, electrode_freq)[selected_fibers]
     return selected_fibers, fiber_freq
 
 
