@@ -9,10 +9,12 @@ from loguru import logger
 from .neurogram import (
     Neurogram,
     mel_scale,
+    bin_index,
     bin_over_y,
     smooth,
     min_max_scale,
     rebin_data,
+    remove_outliers as clip_outliers,
 )
 
 
@@ -37,29 +39,90 @@ def get_electrode_freq_ace():
     return np.array(freqs)[::-1]
 
 
+def _contact_fibre_distance(i_det: np.ndarray, tp: phast.ThresholdProfile) -> float:
+    """Median distance (mm) between each contact and its lowest-threshold fibre."""
+    first_fibre = np.asarray(tp.position)[np.argmin(i_det, axis=0)]
+    return float(np.median(np.abs(first_fibre - np.asarray(tp.electrode.position))))
+
+
+def load_cochlear_profile(version: str = "25_8") -> phast.ThresholdProfile:
+    """``phast.load_cochlear`` with its threshold matrix in the same order as its labels.
+
+    The stored data number electrodes the Cochlear way (E1 basal first) and
+    fibres from base to apex. ``phast.load_cochlear`` (1.1.7) flips the
+    electrode and fibre metadata (positions, T/M levels, Greenwood
+    frequencies) to apical-first, but not ``i_det``: every contact then
+    seems to excite fibres 4-6 mm away from it, and ACE drives its lowest
+    band onto the most basal contact. Here ``i_det`` is flipped on both axes
+    and the T/M levels are stored basal-first, so that ``ace_e2e``'s own
+    flip hands each band the levels of the contact that now carries it.
+
+    Only applied when needed: if ``i_det`` already agrees with the labels
+    (each contact's lowest-threshold fibre near the contact), the profile
+    is returned as loaded.
+    """
+    tp = phast.load_cochlear(version=version)
+    i_det = np.asarray(tp.i_det)
+    flipped = np.ascontiguousarray(i_det[::-1, ::-1])
+    if _contact_fibre_distance(flipped, tp) >= _contact_fibre_distance(i_det, tp):
+        return tp
+
+    el = tp.electrode
+    electrode = phast.ElectrodeConfiguration(
+        m_level=np.flip(el.m_level),
+        t_level=np.flip(el.t_level),
+        insertion_angle=el.insertion_angle,
+        greenwood_f=el.greenwood_f,
+        position=el.position,
+        pw=el.pw,
+        ipg=el.ipg,
+    )
+    return phast.ThresholdProfile(
+        i_det=flipped,
+        electrode=electrode,
+        angle=tp.angle,
+        position=tp.position,
+        greenwood_f=tp.greenwood_f,
+        fiber_type=tp.fiber_type,
+    )
+
+
 def get_fiber_freq_position(
     tp: phast.ThresholdProfile, electrode_freq: np.array
 ) -> np.ndarray:
+    """Frequency assigned to each fibre: the electrode frequencies interpolated
+    along the cochlea, Greenwood's range at the ends.
+
+    Contacts are paired with frequencies by position (most basal contact =
+    highest frequency), whatever order either array is given in: the ACE
+    frequencies come in Cochlear numbering (E1 basal first) while the
+    threshold profile stores electrodes apical first.
+    """
+    position = np.asarray(tp.position, dtype=float)
+    e_pos = np.sort(np.asarray(tp.electrode.position, dtype=float))  # base -> apex
+    e_freq = np.sort(np.asarray(electrode_freq, dtype=float))[::-1]  # high -> low
     fiber_freq = np.interp(
-        tp.position[::-1],
-        np.r_[tp.position[-1], tp.electrode.position[::-1], tp.position[0]],
-        np.r_[tp.greenwood_f.max(), electrode_freq[::-1], tp.greenwood_f.min()],
-    )[::-1]
+        position,
+        np.r_[position.min(), e_pos, position.max()],
+        np.r_[tp.greenwood_f.max(), e_freq, tp.greenwood_f.min()],
+    )
     return fiber_freq
 
 
 def select_fibers(
     fiber_freq: np.ndarray, frequency_bins: np.ndarray, n_fibers_per_bin: int = 10
 ) -> np.ndarray:
-    grouped = np.digitize(
-        fiber_freq, np.r_[frequency_bins[1] - frequency_bins[0], frequency_bins], True
-    )
+    """``n_fibers_per_bin`` fibres for every frequency bin, drawn from the
+    fibres nearest to that bin's frequency (the bins of ``bin_over_y``).
+    Bins with fewer fibres get duplicates."""
+    grouped = bin_index(np.asarray(fiber_freq), frequency_bins)
     selected_fibers = []
-    for fbin, nf in list(zip(*np.unique(grouped, return_counts=True)))[1:-1]:
+    for fbin, nf in zip(*np.unique(grouped[grouped >= 0], return_counts=True)):
         fibers = np.where(grouped == fbin)[0]
         if nf < n_fibers_per_bin:
+            n_extra = n_fibers_per_bin - nf
             sf = np.r_[
-                fibers, np.random.choice(fibers, n_fibers_per_bin - nf, replace=False)
+                fibers, np.random.choice(fibers, n_extra, replace=n_extra > nf)
             ]
         else:
             sf = np.random.choice(fibers, n_fibers_per_bin, replace=False)
@@ -89,8 +152,10 @@ def configure_fiberset(
 ):
     fiber_freq = get_fiber_freq_position(tp, electrode_freq)
     selected_fibers = select_fibers(fiber_freq, frequencies, n_fibers_per_bin)
-    fiber_freq = fiber_freq[selected_fibers]
+    # duplicates are appended to tp and listed after the unique fibres, so look the
+    # frequencies up in the order phast will simulate (and return) the fibres
     selected_fibers = add_duplicate_fibers_to_tp(tp, selected_fibers)
+    fiber_freq = get_fiber_freq_position(tp, electrode_freq)[selected_fibers]
     return selected_fibers, fiber_freq
 
 
@@ -250,7 +315,7 @@ def ace(
     phast.set_seed(seed)
     np.random.seed(seed)
     frequencies = mel_scale(n_mels, min_freq, max_freq)
-    tp = phast.load_cochlear(version=version)
+    tp = load_cochlear_profile(version=version)
 
     selected_fibers, fiber_freq = configure_fiberset(
         tp, get_electrode_freq_ace(), frequencies, n_fibers_per_bin
@@ -368,7 +433,6 @@ def bruce(
 
     if remove_outliers:
         logger.info("removing outliers")  # TODO: why is this after normalization?
-        neurogram_data.clip(0, np.quantile(neurogram_data.ravel(), 0.995))
-        neurogram_data = min_max_scale(neurogram_data, 0, 1)
+        neurogram_data = clip_outliers(neurogram_data, 0.995)
 
     return Neurogram(binsize, frequencies, neurogram_data, "brucezilany")
