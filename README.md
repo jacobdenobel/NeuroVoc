@@ -89,6 +89,10 @@ Each model supports its own optional flags, like `--n-fibers-per-bin`, `--n-mels
 ### 🎧 Reconstruct Audio from Neurogram
 Converts a saved neurogram back into an audio waveform using an inverse STFT-based decoder. Use options like `--n-hop`, `--n-fft`, or `--target-sr` to control reconstruction parameters. 
 
+Two decoders are available (`--method`, or `reconstruct(..., method=...)` in Python):
+- `fibre_linear` (default): every row is treated as a fibre at its own frequency, and the rates are kernel-averaged straight onto the linear STFT frequency grid. There is no mel filterbank to invert. It works on the usual mel-binned neurograms and on fibre-level ones (`--fiber-level` for `specres`/`ace`, or `fiber_level=True`; one row per fibre, about 10x the memory).
+- `mel`: the rows are taken as mel bands and the mel filterbank is inverted.
+
 ```bash
 neurovoc reconstruct output.pkl reconstructed.wav
 ```
@@ -123,7 +127,7 @@ neurogram = Neurogram(
 )
 ```
 
-📌 **Note:** Currently, only **mel-scale frequency bins** are supported for decoding.
+📌 **Note:** The default decoder (`fibre_linear`) accepts any row frequencies; `--method mel` needs rows spaced uniformly on the mel scale.
 
 Once constructed, save it to disk with:
 

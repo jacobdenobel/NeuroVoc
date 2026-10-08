@@ -14,6 +14,9 @@ class Neurogram:
     data: np.ndarray = field(repr=None)
     source: str 
     shape: tuple = None
+    # number of frequency bands the neurogram resolves (its mel rows); for a
+    # fibre-level neurogram the rows are fibres, more than n_mels
+    n_mels: int = None
 
     def __post_init__(self):
         self.shape = self.data.shape

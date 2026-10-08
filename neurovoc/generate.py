@@ -188,9 +188,17 @@ def process_neurogram(
     normalize: bool,
     name: str,
     duration: float,
+    fiber_level: bool = False,
 ):
-    logger.info("rebin neurogram")
-    neurogram_data = bin_over_y(neurogram_data, fiber_freq, frequencies, agg=np.sum)
+    n_mels = len(frequencies)
+    if fiber_level:
+        logger.info("keeping one row per fibre, sorted by frequency")
+        order = np.argsort(fiber_freq, kind="stable")
+        neurogram_data = np.asarray(neurogram_data)[order]
+        frequencies = np.asarray(fiber_freq)[order]
+    else:
+        logger.info("rebin neurogram")
+        neurogram_data = bin_over_y(neurogram_data, fiber_freq, frequencies, agg=np.sum)
 
     # The end of response does not mean the end of the stimulus
     ng_duration = neurogram_data.shape[1] * binsize
@@ -211,7 +219,7 @@ def process_neurogram(
         logger.info("scaling neurogram to [0,1)")
         neurogram_data = min_max_scale(neurogram_data, 0, 1)
 
-    return Neurogram(binsize, frequencies, neurogram_data, name)
+    return Neurogram(binsize, frequencies, neurogram_data, name, n_mels=n_mels)
 
 
 def specres(
@@ -234,6 +242,7 @@ def specres(
     seed: int = 42,
     binsize: float = 3.6e-05,
     n_threads: int = -1,
+    fiber_level: bool = False,
     **kwargs,
 ) -> Neurogram:
     if isinstance(audio, (str, pathlib.Path)):
@@ -282,6 +291,7 @@ def specres(
         normalize,
         "phast_specres",
         duration,
+        fiber_level,
     )
     return neurogram
 
@@ -306,6 +316,7 @@ def ace(
     binsize: float = 3.6e-05,
     n_threads: int = -1,
     version: str = "25_8",
+    fiber_level: bool = False,
     **kwargs,
 ) -> Neurogram:
     if isinstance(audio, (str, pathlib.Path)):
@@ -349,6 +360,7 @@ def ace(
         normalize,
         "phast_ace",
         duration,
+        fiber_level,
     )
 
     return neurogram
@@ -435,4 +447,4 @@ def bruce(
         logger.info("removing outliers")  # TODO: why is this after normalization?
         neurogram_data = clip_outliers(neurogram_data, 0.995)
 
-    return Neurogram(binsize, frequencies, neurogram_data, "brucezilany")
+    return Neurogram(binsize, frequencies, neurogram_data, "brucezilany", n_mels=n_mels)

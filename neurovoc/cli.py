@@ -40,6 +40,11 @@ phast_options = [
     click.option("--adaptation-amplitude", type=float, default=7.142),
     click.option("--accommodation-rate", type=float, default=2.0),
     click.option("--adaptation-rate", type=float, default=19.996),
+    click.option(
+        "--fiber-level/--mel-rows",
+        default=False,
+        help="Keep one row per fibre (for --method fibre_linear; ~10x the memory)",
+    ),
 ]
 
 specres_options = [
@@ -51,6 +56,12 @@ ace_options = [
 ] + phast_options
 
 reconstruct_options = [
+    click.option(
+        "--method",
+        type=click.Choice(["fibre_linear", "mel"]),
+        default="fibre_linear",
+        help="fibre_linear: rates straight onto the linear STFT grid; mel: invert a mel filterbank",
+    ),
     click.option("--n-hop", type=int, default=32, help="Hop length for STFT/ISTFT"),
     click.option("--n-fft", type=int, default=512, help="FFT window size"),
     click.option(

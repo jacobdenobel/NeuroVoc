@@ -97,6 +97,7 @@ def reconstruct_neurogram(
     n_fft: int,
     n_hop: int,
     frequencies: np.ndarray = None,
+    seed: int = None,
 ) -> np.ndarray:
     """
     Parameters
@@ -114,15 +115,20 @@ def reconstruct_neurogram(
         The number of hops that were applied to M
     frequencies: np.ndarray, optional
         The row frequencies of M; by default mel_scale(n_rows, min_freq, max_freq)
+    seed: int, optional
+        Seed for Griffin-Lim's random initial phase (None: not reproducible)
     """
     if frequencies is None:
         frequencies = mel_scale(M.shape[-2], min_freq, max_freq)
     mel_basis = mel_basis_for(frequencies, sr, n_fft)
     inverse = invert_mel_power(mel_basis, M, frequencies, sr, n_fft)
-    inverse = np.sqrt(inverse)
+    return griffinlim(np.sqrt(inverse), n_fft, n_hop, seed)
 
+
+def griffinlim(magnitude: np.ndarray, n_fft: int, n_hop: int, seed: int = None) -> np.ndarray:
+    """Waveform from a linear magnitude spectrogram (fast Griffin-Lim, 32 iterations)."""
     reconstructed = librosa.feature.inverse.griffinlim(
-        inverse,
+        magnitude,
         n_iter=32,
         hop_length=n_hop,
         win_length=None,
@@ -134,7 +140,7 @@ def reconstruct_neurogram(
         pad_mode="constant",
         momentum=0.99,
         init="random",
-        random_state=None,
+        random_state=seed,
     )
     return reconstructed
 
@@ -142,8 +148,10 @@ def reconstruct_neurogram(
 def downsample(data: np.ndarray, n_hop: int) -> np.ndarray:
     n_s = int(np.ceil(data.shape[1] / n_hop))
     g = gcd(n_s, data.shape[1])
-    data = np.array(
-        [scipy.signal.resample_poly(row, n_s // g, data.shape[1] // g) for row in data]
+    # one call for all rows: the filter is designed once (it is as long as the
+    # signal for most lengths, so designing it per row took seconds per row)
+    data = scipy.signal.resample_poly(
+        data, n_s // g, data.shape[1] // g, axis=1
     ).clip(0, 1)
     return data
 
@@ -154,6 +162,52 @@ def power_scale(data, ref_db: float = 50.0):
     return data
 
 
+def fibres_to_linear_power(
+    frames: np.ndarray,
+    fibre_freq: np.ndarray,
+    sr: float,
+    n_fft: int,
+    sigma_mel: float,
+    min_freq: float,
+    max_freq: float,
+    ref_db: float = 50.0,
+) -> np.ndarray:
+    """Fibre rates (fibres x frames) -> linear power spectrogram (fft bins x frames).
+
+    Each STFT bin gets the Gaussian-kernel-weighted mean rate of the fibres
+    whose frequency lies near it on the mel scale (Nadaraya-Watson, so a
+    stretch with many fibres is not louder than one with few). There is no
+    mel filterbank to invert. The rates are min-max scaled and mapped to
+    power as in ``power_scale``; bins outside [min_freq, max_freq], or with
+    no fibre within ~4 sigma, are zero.
+    """
+    frames = np.asarray(frames, dtype=float)
+    fft_f = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    band = np.flatnonzero((fft_f >= min_freq) & (fft_f <= max_freq))
+    d = (
+        librosa.hz_to_mel(fft_f[band])[:, None]
+        - librosa.hz_to_mel(np.asarray(fibre_freq, dtype=float))[None, :]
+    ) / sigma_mel
+    w = np.exp(-0.5 * d**2)
+    w[np.abs(d) > 4] = 0.0
+    wsum = w.sum(axis=1)
+    covered = wsum > 1e-3
+    rates = (w[covered] @ frames) / wsum[covered, None]
+
+    S = np.zeros((len(fft_f), frames.shape[1]))
+    S[band[covered]] = power_scale(min_max_scale(rates, 0, 1), ref_db)
+    return S
+
+
+def kernel_sigma_mel(min_freq: float, max_freq: float, n_bands: int) -> float:
+    """Kernel width: half the spacing of ``n_bands`` mel bands over [min_freq, max_freq]."""
+    span = librosa.hz_to_mel(max_freq) - librosa.hz_to_mel(min_freq)
+    return 0.5 * float(span) / (n_bands - 1)
+
+
+METHODS = ("fibre_linear", "mel")
+
+
 def reconstruct(
     neurogram: Neurogram | str | pathlib.Path,
     n_hop: int = 32,
@@ -161,8 +215,25 @@ def reconstruct(
     ref_db: float = 50,
     target_sr: int = 44100,
     target_db_fs: int = -20,
+    method: str = "fibre_linear",
+    seed: int = None,
     **kwargs,
 ):
+    """Audio from a neurogram.
+
+    method:
+        ``"fibre_linear"`` (default): every row is taken as a fibre at its own
+        frequency and the rates are kernel-averaged straight onto the linear
+        STFT grid (``fibres_to_linear_power``) - no mel stage. Works on mel-binned
+        neurograms and on fibre-level ones (``specres``/``ace`` with
+        ``fiber_level=True``).
+        ``"mel"``: the rows are mel bands; the mel filterbank is inverted
+        (``invert_mel_power``). Needs rows uniformly spaced on the mel scale.
+    seed:
+        Seed for Griffin-Lim's random initial phase (default None, as before).
+    """
+    if method not in METHODS:
+        raise ValueError(f"unknown method {method!r}; choose from {METHODS}")
     if isinstance(neurogram, (str, pathlib.Path)) and os.path.isfile(neurogram):
         logger.info(f"loading neurogram from file: {neurogram}")
         neurogram = Neurogram.load(neurogram)
@@ -170,19 +241,36 @@ def reconstruct(
     logger.info("downsample neurogram")
     data = downsample(neurogram.data, n_hop)
 
-    logger.info("map to power scale")
-    data = power_scale(data, ref_db)
-
-    logger.info("reconstruct using griffin-lim")
-    reconstructed = reconstruct_neurogram(
-        data,
-        neurogram.sample_rate,
-        neurogram.min_freq,
-        neurogram.max_freq,
-        n_fft,
-        n_hop,
-        frequencies=neurogram.frequencies,
-    )
+    if method == "fibre_linear":
+        n_bands = getattr(neurogram, "n_mels", None) or data.shape[0]
+        sigma = kernel_sigma_mel(neurogram.min_freq, neurogram.max_freq, n_bands)
+        logger.info("map fibre rates onto the linear frequency grid")
+        power = fibres_to_linear_power(
+            data,
+            neurogram.frequencies,
+            neurogram.sample_rate,
+            n_fft,
+            sigma,
+            neurogram.min_freq,
+            neurogram.max_freq,
+            ref_db,
+        )
+        logger.info("reconstruct using griffin-lim")
+        reconstructed = griffinlim(np.sqrt(power), n_fft, n_hop, seed)
+    else:
+        logger.info("map to power scale")
+        data = power_scale(data, ref_db)
+        logger.info("reconstruct using griffin-lim")
+        reconstructed = reconstruct_neurogram(
+            data,
+            neurogram.sample_rate,
+            neurogram.min_freq,
+            neurogram.max_freq,
+            n_fft,
+            n_hop,
+            frequencies=neurogram.frequencies,
+            seed=seed,
+        )
     logger.info("resample to original sample rate")
     reconstructed = librosa.resample(
         reconstructed, orig_sr=neurogram.sample_rate, target_sr=target_sr
