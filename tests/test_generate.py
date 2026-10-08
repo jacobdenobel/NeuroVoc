@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 class TestGenerate(unittest.TestCase):
     def setUp(self):
         root = os.path.dirname(os.path.dirname(__file__))
-        filename = "data/din/triplets/025.wav"
+        filename = "data/025.wav"
         self.test_file = os.path.join(root, filename)
 
     def test_specres(self):
@@ -19,6 +19,7 @@ class TestGenerate(unittest.TestCase):
         
         print(ng)            
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pkl")
+        temp_file.close()  # Windows cannot reopen a file that is still open
         ng.save(temp_file.name)
         
         ng_loaded = neurovoc.Neurogram.load(temp_file.name)
